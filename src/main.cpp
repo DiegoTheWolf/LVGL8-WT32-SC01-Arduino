@@ -3,13 +3,13 @@
 */
 #define LGFX_AUTODETECT // Autodetect board
 #define LGFX_USE_V1     // set to use new version of library
-//#define LV_CONF_INCLUDE_SIMPLE
+// #define LV_CONF_INCLUDE_SIMPLE
 
 /* Uncomment below line to draw on screen with touch */
-//#define DRAW_ON_SCREEN
+#define DRAW_ON_SCREEN
 
 #include <LovyanGFX.hpp> // main library
-static LGFX lcd; // declare display variable
+static LGFX lcd;         // declare display variable
 
 #include <lvgl.h>
 #include "lv_conf.h"
@@ -24,6 +24,17 @@ static lv_color_t buf[screenWidth * 10];
 static int32_t x, y;
 #endif
 
+// // Variables for loadcell
+#include <Preferences.h>
+#include <hx711_zp.h>
+
+#define HX711_dout 4
+#define HX711_sck 2
+
+HX711 loadcell;
+float reading = 0;
+// Preferences preferences;
+
 /*** Function declaration ***/
 void display_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p);
 void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data);
@@ -31,7 +42,6 @@ void lv_button_demo(void);
 
 void setup(void)
 {
-
   Serial.begin(115200); /* prepare for possible serial debug */
 
   lcd.init(); // Initialize LovyanGFX
@@ -60,12 +70,19 @@ void setup(void)
   indev_drv.read_cb = touchpad_read;
   lv_indev_drv_register(&indev_drv);
 
+  /*** Initialize loadcell***/
+  loadcell.begin(HX711_dout, HX711_sck);
+  // loadcell.set_scale(preferences.getFloat("sfactor", 2.0F));
+  // loadcell.set_zeropoint_offset(preferences.getLong("zeropoint", 1));
+  loadcell.set_scale(2.0F);
+  loadcell.set_zeropoint_offset(1);
+  Serial.println("Loadcell initialized");
+
   /*** Create simple label and show LVGL version ***/
-  String LVGL_Arduino = "WT32-SC01 with LVGL ";
-  LVGL_Arduino += String('v') + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
+  String LVGL_Arduino = "Seilrissmaschine V1.0";
   lv_obj_t *label = lv_label_create(lv_scr_act()); // full screen as the parent
   lv_label_set_text(label, LVGL_Arduino.c_str());  // set label text
-  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);      // Center but 20 from the top
+  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);    // Center but 20 from the top
 
   lv_button_demo();
 }
@@ -75,6 +92,13 @@ void loop()
   lv_timer_handler(); /* let the GUI do its work */
   delay(5);
 
+  lcd.setCursor(0, 0);
+  Serial.print("reading loadcell ... ");
+  reading = loadcell.read();
+  Serial.print("finished: ");
+  Serial.println(reading);
+  lcd.printf("Force: %9.2f", reading);
+
 #ifdef DRAW_ON_SCREEN
   /*** Draw on screen with touch ***/
   if (lcd.getTouch(&x, &y))
@@ -82,99 +106,98 @@ void loop()
     lcd.fillRect(x - 2, y - 2, 5, 5, TFT_RED);
     lcd.setCursor(380, 0);
     lcd.printf("Touch:(%03d,%03d)", x, y);
-    // }
+  }
 #endif
-  }
+}
 
-  /*** Display callback to flush the buffer to screen ***/
-  void display_flush(lv_disp_drv_t * disp, const lv_area_t *area, lv_color_t *color_p)
+/*** Display callback to flush the buffer to screen ***/
+void display_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
+{
+  uint32_t w = (area->x2 - area->x1 + 1);
+  uint32_t h = (area->y2 - area->y1 + 1);
+
+  lcd.startWrite();
+  lcd.setAddrWindow(area->x1, area->y1, w, h);
+  lcd.pushColors((uint16_t *)&color_p->full, w * h, true);
+  lcd.endWrite();
+
+  lv_disp_flush_ready(disp);
+}
+
+/*** Touchpad callback to read the touchpad ***/
+void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
+{
+  uint16_t touchX, touchY;
+  bool touched = lcd.getTouch(&touchX, &touchY);
+
+  if (!touched)
   {
-    uint32_t w = (area->x2 - area->x1 + 1);
-    uint32_t h = (area->y2 - area->y1 + 1);
-
-    lcd.startWrite();
-    lcd.setAddrWindow(area->x1, area->y1, w, h);
-    lcd.pushColors((uint16_t *)&color_p->full, w * h, true);
-    lcd.endWrite();
-
-    lv_disp_flush_ready(disp);
+    data->state = LV_INDEV_STATE_REL;
   }
-
-  /*** Touchpad callback to read the touchpad ***/
-  void touchpad_read(lv_indev_drv_t * indev_driver, lv_indev_data_t * data)
+  else
   {
-    uint16_t touchX, touchY;
-    bool touched = lcd.getTouch(&touchX, &touchY);
+    data->state = LV_INDEV_STATE_PR;
 
-    if (!touched)
-    {
-      data->state = LV_INDEV_STATE_REL;
-    }
-    else
-    {
-      data->state = LV_INDEV_STATE_PR;
+    /*Set the coordinates*/
+    data->point.x = touchX;
+    data->point.y = touchY;
 
-      /*Set the coordinates*/
-      data->point.x = touchX;
-      data->point.y = touchY;
-
-      // Serial.printf("Touch (x,y): (%03d,%03d)\n",touchX,touchY );
-    }
+    // Serial.printf("Touch (x,y): (%03d,%03d)\n",touchX,touchY );
   }
+}
 
-  /* Counter button event handler */
-  static void counter_event_handler(lv_event_t * e)
+/* Counter button event handler */
+static void counter_event_handler(lv_event_t *e)
+{
+  lv_event_code_t code = lv_event_get_code(e);
+  lv_obj_t *btn = lv_event_get_target(e);
+  if (code == LV_EVENT_CLICKED)
   {
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *btn = lv_event_get_target(e);
-    if (code == LV_EVENT_CLICKED)
-    {
-      static uint8_t cnt = 0;
-      cnt++;
+    static uint8_t cnt = 0;
+    cnt++;
 
-      /*Get the first child of the button which is the label and change its text*/
-      lv_obj_t *label = lv_obj_get_child(btn, 0);
-      lv_label_set_text_fmt(label, "Button: %d", cnt);
-      LV_LOG_USER("Clicked");
-      Serial.println("Clicked");
-    }
+    /*Get the first child of the button which is the label and change its text*/
+    lv_obj_t *label = lv_obj_get_child(btn, 0);
+    lv_label_set_text_fmt(label, "Button: %d", cnt);
+    LV_LOG_USER("Clicked");
+    Serial.println("Clicked");
   }
+}
 
-  /* Toggle button event handler */
-  static void toggle_event_handler(lv_event_t * e)
+/* Toggle button event handler */
+static void toggle_event_handler(lv_event_t *e)
+{
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_VALUE_CHANGED)
   {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_VALUE_CHANGED)
-    {
-      LV_LOG_USER("Toggled");
-      Serial.println("Toggled");
-    }
+    LV_LOG_USER("Toggled");
+    Serial.println("Toggled");
   }
+}
 
-  void lv_button_demo(void)
-  {
-    lv_obj_t *label;
+void lv_button_demo(void)
+{
+  lv_obj_t *label;
 
-    // Button with counter
-    lv_obj_t *btn1 = lv_btn_create(lv_scr_act());
-    lv_obj_add_event_cb(btn1, counter_event_handler, LV_EVENT_ALL, NULL);
+  // Button with counter
+  lv_obj_t *btn1 = lv_btn_create(lv_scr_act());
+  lv_obj_add_event_cb(btn1, counter_event_handler, LV_EVENT_ALL, NULL);
 
-    lv_obj_set_pos(btn1, 100, 100);   /*Set its position*/
-    lv_obj_set_size(btn1, 120, 50);   /*Set its size*/
+  lv_obj_set_pos(btn1, 100, 100); /*Set its position*/
+  lv_obj_set_size(btn1, 120, 50); /*Set its size*/
 
+  label = lv_label_create(btn1);
+  lv_label_set_text(label, "Button");
+  lv_obj_center(label);
 
-    label = lv_label_create(btn1);
-    lv_label_set_text(label, "Button");
-    lv_obj_center(label);
+  // Toggle button
+  lv_obj_t *btn2 = lv_btn_create(lv_scr_act());
+  lv_obj_add_event_cb(btn2, toggle_event_handler, LV_EVENT_ALL, NULL);
+  lv_obj_add_flag(btn2, LV_OBJ_FLAG_CHECKABLE);
+  lv_obj_set_pos(btn2, 250, 100); /*Set its position*/
+  lv_obj_set_size(btn2, 120, 50); /*Set its size*/
 
-    // Toggle button
-    lv_obj_t *btn2 = lv_btn_create(lv_scr_act());
-    lv_obj_add_event_cb(btn2, toggle_event_handler, LV_EVENT_ALL, NULL);
-    lv_obj_add_flag(btn2, LV_OBJ_FLAG_CHECKABLE);
-    lv_obj_set_pos(btn2, 250, 100);   /*Set its position*/
-    lv_obj_set_size(btn2, 120, 50);   /*Set its size*/
-
-    label = lv_label_create(btn2);
-    lv_label_set_text(label, "Toggle Button");
-    lv_obj_center(label);
-  }
+  label = lv_label_create(btn2);
+  lv_label_set_text(label, "Toggle Button");
+  lv_obj_center(label);
+}
