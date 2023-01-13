@@ -19,8 +19,10 @@ static lv_obj_t *ta;
 static lv_obj_t *scr_PREV;
 static lv_obj_t *scr_start;
 static lv_obj_t *scr_settings;
-static lv_obj_t *scr_calibration_zero;
-static lv_obj_t *scr_calibration_force;
+static lv_obj_t *scr_calibration;
+static lv_obj_t *scr_measurement;
+static lv_obj_t *scr_measurement_live;
+static lv_obj_t *scr_measurement_end;
 
 // Variables for loadcell
 #include <Preferences.h>
@@ -31,8 +33,10 @@ static lv_obj_t *scr_calibration_force;
 #define MSG_NEW_FORCE_MEASURED 1
 
 HX711 loadcell;
-float reading = 0;
-Preferences preferences;
+float cal_value = 1;
+Preferences preferences; // https://randomnerdtutorials.com/esp32-save-data-permanently-preferences/
+#define PREF_SCALE "scale"
+#define PREF_ZERO "zero"
 
 /*** Menu Structure ***/
 #include "MenuClass.h"
@@ -47,7 +51,10 @@ void kb_create(void);
 void ta_event_cb(lv_event_t *e);
 void create_screen_start();
 void create_screen_settings();
-void create_screen_calibration_zero();
+void create_screen_calibration();
+void create_screen_measurement();
+void create_screen_measurement_live();
+void create_screen_measurement_end();
 
 void setup(void)
 {
@@ -85,12 +92,18 @@ void setup(void)
   // loadcell.set_zeropoint_offset(preferences.getLong("zeropoint", 1));
   loadcell.set_scale(2.0F);
   loadcell.set_zeropoint_offset(1);
-  Serial.println("Loadcell initialized");
+  cal_value = loadcell.get_scale();
 
+  /*** Preferences ***/
+  preferences.begin("srm-app", false);
+  loadcell.set_scale(preferences.getFloat(PREF_SCALE, 1.0F));
+  loadcell.set_zeropoint_offset(preferences.getFloat(PREF_ZERO, 0));
+
+  /*** Screens***/
   create_screen_start();
   create_screen_settings();
-  create_screen_calibration_zero();
-  lv_scr_load(scr_calibration_zero);
+  create_screen_calibration();
+  lv_scr_load(scr_start);
 }
 
 void loop()
@@ -103,6 +116,8 @@ void loop()
 
   // lcd.getTouch(&x, &y)
 }
+
+#pragma region screen base functions
 
 /*** Display callback to flush the buffer to screen ***/
 void display_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
@@ -140,6 +155,8 @@ void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
   }
 }
 
+#pragma endregion
+
 static void to_scr_start_handler(lv_event_t *e)
 {
   lv_event_code_t code = lv_event_get_code(e);
@@ -151,7 +168,7 @@ static void to_scr_calibration_zero_handler(lv_event_t *e)
 {
   lv_event_code_t code = lv_event_get_code(e);
   if (code == LV_EVENT_CLICKED)
-    lv_scr_load(scr_calibration_zero);
+    lv_scr_load(scr_calibration);
 }
 
 /* Settings button event handler */
@@ -167,7 +184,7 @@ static void createBackButton(lv_obj_t *scr)
   // Back Button
   lv_obj_t *btn_up = lv_btn_create(scr);
   lv_obj_add_event_cb(btn_up, to_scr_start_handler, LV_EVENT_ALL, NULL);
-  lv_obj_set_size(btn_up, 50, 50);               /*Set its size*/
+  lv_obj_set_size(btn_up, 50, 40);               /*Set its size*/
   lv_obj_align(btn_up, LV_ALIGN_TOP_LEFT, 0, 0); // Center and 0 from the top
 
   lv_obj_t *label = lv_label_create(btn_up);
@@ -175,57 +192,65 @@ static void createBackButton(lv_obj_t *scr)
   lv_obj_center(label);
 }
 
-// https://forum.lvgl.io/t/multiple-windows/3850
+#pragma region Calibration
 
 void label_forceRaw_change_event(lv_event_t *e)
 {
   lv_obj_t *label = lv_event_get_target(e);
-  Serial.println("Force Update msg");
   lv_label_set_text_fmt(label, "Rohwert: %06.0f", loadcell.get_last_reading());
 }
 
 void label_forceRawZero_change_event(lv_event_t *e)
 {
   lv_obj_t *label = lv_event_get_target(e);
-  Serial.println("Force Update msg");
   lv_label_set_text_fmt(label, "Genullt: %06.0f", loadcell.get_last_reading_zeroed());
 }
 
 void label_forceCal_change_event(lv_event_t *e)
 {
   lv_obj_t *label = lv_event_get_target(e);
-  Serial.println("Force Update msg");
   lv_label_set_text_fmt(label, "Kraft: %06.0f N", loadcell.get_cal_force());
 }
 
 void calibrate_zero_event(lv_event_t *e)
 {
   lv_event_code_t code = lv_event_get_code(e);
-  if (code == LV_EVENT_CLICKED)
-    loadcell.set_zeropoint_offset_current();
+  if (code != LV_EVENT_CLICKED)
+    return;
+  loadcell.set_zeropoint_offset_current();
+  preferences.putFloat(PREF_ZERO, loadcell.get_zeropoint_offset());
 }
 
 void calibrate_force_event(lv_event_t *e)
 {
   lv_event_code_t code = lv_event_get_code(e);
-  if (code == LV_EVENT_CLICKED)
-    loadcell.set_scale_current(50);
+  if (code != LV_EVENT_CLICKED)
+    return;
+  loadcell.set_scale_current(cal_value);
+  preferences.putFloat(PREF_SCALE, loadcell.get_scale());
 }
 
-void create_screen_calibration_zero()
+void calValue_changed_event(lv_event_t *e)
 {
-  scr_calibration_zero = lv_obj_create(NULL);
+  lv_obj_t *ta_ = lv_event_get_target(e);
+  const char *txt = lv_textarea_get_text(ta_);
+  cal_value = static_cast<float>(*txt);
+}
 
-  lv_obj_set_style_bg_color(scr_calibration_zero, lv_color_black(), LV_STATE_DEFAULT);
+void create_screen_calibration()
+{
+  scr_calibration = lv_obj_create(NULL);
+
+  lv_obj_set_style_bg_color(scr_calibration, lv_color_black(), LV_STATE_DEFAULT);
 
   lv_obj_t *label;
   lv_obj_t *btn;
 
-  label = lv_label_create(scr_calibration_zero);
+  label = lv_label_create(scr_calibration);
   lv_label_set_text(label, "Kalibrierung");
   lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 10);
 
-  btn = lv_btn_create(scr_calibration_zero);
+  btn = lv_btn_create(scr_calibration);
   lv_obj_add_event_cb(btn, calibrate_zero_event, LV_EVENT_ALL, NULL);
   lv_obj_set_size(btn, 150, 60);
   lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 70, 40);
@@ -233,55 +258,298 @@ void create_screen_calibration_zero()
   lv_label_set_text(label, "Nullpunkt");
   lv_obj_center(label);
 
-  label = lv_label_create(scr_calibration_zero);
+  label = lv_label_create(scr_calibration);
   lv_label_set_text(label, "Maschine ohne Kraft,\naber mit allen Anbauteilen\nstehen lassen.");
   lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
   lv_obj_align(label, LV_ALIGN_TOP_LEFT, 230, 40);
 
-  btn = lv_btn_create(scr_calibration_zero);
+  btn = lv_btn_create(scr_calibration);
   lv_obj_add_event_cb(btn, calibrate_force_event, LV_EVENT_ALL, NULL);
-  lv_obj_set_size(btn, 150, 60);
+  lv_obj_set_size(btn, 100, 60);
   lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 70, 120);
   label = lv_label_create(btn);
   lv_label_set_text(label, "Kraft");
   lv_obj_center(label);
 
-  label = lv_label_create(scr_calibration_zero);
-  lv_label_set_text(label, "Maschine mit definierter\nKraft belasten.");
+  label = lv_label_create(scr_calibration);
+  lv_label_set_text(label, "Maschine mit\nKraft belasten.");
   lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-  lv_obj_align(label, LV_ALIGN_TOP_LEFT, 230, 130);
+  lv_obj_align(label, LV_ALIGN_TOP_LEFT, 170, 130);
 
-  label = lv_label_create(scr_calibration_zero);
+  lv_obj_t *ta = lv_textarea_create(scr_calibration);
+  lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 300, 130);
+  lv_obj_set_size(ta, 60, 60);
+  lv_textarea_set_one_line(ta, true);
+  lv_textarea_set_accepted_chars(ta, "0123456789.");
+  char result[8];
+  dtostrf(loadcell.get_scale(), 6, 2, result);
+  lv_textarea_set_text(ta, result);
+  // lv_obj_add_state(ta, LV_STATE_DEFAULT);
+  lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, NULL);
+  lv_obj_add_event_cb(ta, calValue_changed_event, LV_EVENT_VALUE_CHANGED, NULL);
+
+  label = lv_label_create(scr_calibration);
   lv_label_set_text(label, "Messwerte:");
   lv_obj_align(label, LV_ALIGN_LEFT_MID, 70, 40);
 
-  label = lv_label_create(scr_calibration_zero);
+  label = lv_label_create(scr_calibration);
   lv_label_set_text(label, "Messwert roh");
   lv_obj_align(label, LV_ALIGN_LEFT_MID, 70, 60);
   lv_obj_add_event_cb(label, label_forceRaw_change_event, LV_EVENT_MSG_RECEIVED, NULL);
   lv_msg_subscribe_obj(MSG_NEW_FORCE_MEASURED, label, NULL);
 
-  label = lv_label_create(scr_calibration_zero);
+  label = lv_label_create(scr_calibration);
   lv_label_set_text(label, "Messwert zero");
   lv_obj_align(label, LV_ALIGN_LEFT_MID, 70, 80);
   lv_obj_add_event_cb(label, label_forceRawZero_change_event, LV_EVENT_MSG_RECEIVED, NULL);
   lv_msg_subscribe_obj(MSG_NEW_FORCE_MEASURED, label, NULL);
 
-  label = lv_label_create(scr_calibration_zero);
+  label = lv_label_create(scr_calibration);
   lv_label_set_text(label, "Messwert kalibriert");
   lv_obj_align(label, LV_ALIGN_LEFT_MID, 70, 100);
   lv_obj_add_event_cb(label, label_forceCal_change_event, LV_EVENT_MSG_RECEIVED, NULL);
   lv_msg_subscribe_obj(MSG_NEW_FORCE_MEASURED, label, NULL);
 
-  createBackButton(scr_calibration_zero);
+  createBackButton(scr_calibration);
 
   // https://docs.lvgl.io/latest/en/html/widgets/textarea.html
-  // ta = lv_textarea_create(lv_scr_act());
-  // lv_obj_align(ta, LV_ALIGN_TOP_MID, 50, 200);
-  // lv_obj_set_size(ta, 200, 80);
-  // lv_obj_add_state(ta, LV_STATE_FOCUSED);
-  // lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, NULL);
 }
+
+#pragma endregion
+
+#pragma region Measurement
+
+void start_measurement_event(lv_event_t *e)
+{
+  // TODO:
+}
+
+void goto_startposition_event(lv_event_t *e)
+{
+  // TODO:
+}
+
+void maxForce_changed_event(lv_event_t *e)
+{
+  lv_obj_t *ta_ = lv_event_get_target(e);
+  const char *txt = lv_textarea_get_text(ta_);
+  cal_value = static_cast<float>(*txt);
+}
+
+void minForce_changed_event(lv_event_t *e)
+{
+  lv_obj_t *ta_ = lv_event_get_target(e);
+  const char *txt = lv_textarea_get_text(ta_);
+  cal_value = static_cast<float>(*txt);
+}
+
+void maxTime_changed_event(lv_event_t *e)
+{
+  lv_obj_t *ta_ = lv_event_get_target(e);
+  const char *txt = lv_textarea_get_text(ta_);
+  cal_value = static_cast<float>(*txt);
+}
+
+void create_screen_measurement()
+{
+  scr_measurement = lv_obj_create(NULL);
+
+  lv_obj_set_style_bg_color(scr_measurement, lv_color_black(), LV_STATE_DEFAULT);
+
+  lv_obj_t *label;
+  lv_obj_t *btn;
+  lv_obj_t *ta;
+
+  label = lv_label_create(scr_measurement);
+  lv_label_set_text(label, "Messung");
+  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 10);
+
+  btn = lv_btn_create(scr_measurement);
+  lv_obj_add_event_cb(btn, start_measurement_event, LV_EVENT_ALL, NULL);
+  lv_obj_set_size(btn, 100, 70);
+  lv_obj_align(btn, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+  lv_obj_set_style_bg_color(btn, lv_color_hex3(0x0F0), LV_STATE_DEFAULT);
+  label = lv_label_create(btn);
+  lv_label_set_text(label, "START");
+  lv_obj_center(label);
+
+  btn = lv_btn_create(scr_measurement);
+  lv_obj_add_event_cb(btn, goto_startposition_event, LV_EVENT_ALL, NULL);
+  lv_obj_set_size(btn, 100, 70);
+  lv_obj_align(btn, LV_ALIGN_BOTTOM_LEFT, 10, 10);
+  lv_obj_set_style_bg_color(btn, lv_color_hex3(0x99F), LV_STATE_DEFAULT);
+  label = lv_label_create(btn);
+  lv_label_set_text(label, "Startposition");
+  lv_obj_center(label);
+
+  // IDEA: Dropdown with known ropes. Values stored in _preferences_. Screen for new entries.
+
+  label = lv_label_create(scr_measurement);
+  lv_label_set_recolor(label, true);
+  lv_label_set_text(label, "Kraft-#99ff99 blue#Minimum");
+  lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, 60);
+
+  ta = lv_textarea_create(scr_measurement);
+  lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 150, 60);
+  lv_obj_set_size(ta, 50, 50);
+  lv_textarea_set_one_line(ta, true);
+  lv_textarea_set_accepted_chars(ta, "0123456789.");
+  lv_textarea_set_text(ta, "100");
+  lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, NULL);
+  lv_obj_add_event_cb(ta, maxForce_changed_event, LV_EVENT_VALUE_CHANGED, NULL);
+
+  label = lv_label_create(scr_measurement);
+  lv_label_set_recolor(label, true);
+  lv_label_set_text(label, "Kraft-#ff9999 red#Maximum");
+  lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, 120);
+
+  ta = lv_textarea_create(scr_measurement);
+  lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 150, 120);
+  lv_obj_set_size(ta, 50, 50);
+  lv_textarea_set_one_line(ta, true);
+  lv_textarea_set_accepted_chars(ta, "0123456789.");
+  lv_textarea_set_text(ta, "200");
+  lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, NULL);
+  lv_obj_add_event_cb(ta, minForce_changed_event, LV_EVENT_VALUE_CHANGED, NULL);
+
+  label = lv_label_create(scr_measurement);
+  lv_label_set_recolor(label, true);
+  lv_label_set_text(label, "Zeit-#9999ff red#Maximum");
+  lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, 180);
+
+  ta = lv_textarea_create(scr_measurement);
+  lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 150, 180);
+  lv_obj_set_size(ta, 50, 50);
+  lv_textarea_set_one_line(ta, true);
+  lv_textarea_set_accepted_chars(ta, "0123456789.");
+  lv_textarea_set_text(ta, "40"); // 5 mm/s @ 200 mm = 40s
+  lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, NULL);
+  lv_obj_add_event_cb(ta, maxTime_changed_event, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
+#pragma endregion
+
+#pragma region MeasurementLive
+
+void stop_measurement_event(lv_event_t *e)
+{
+  // TODO:
+}
+
+void label_forceMeasurement_change_event(lv_event_t *e)
+{
+  lv_obj_t *label = lv_event_get_target(e);
+  lv_label_set_text_fmt(label, "%04.0f N", loadcell.get_cal_force());
+}
+
+void create_screen_measurement_live()
+{
+  scr_measurement_live = lv_obj_create(NULL);
+
+  lv_obj_set_style_bg_color(scr_measurement_live, lv_color_hex3(0x070), LV_STATE_DEFAULT);
+
+  lv_obj_t *label;
+  lv_obj_t *btn;
+  lv_obj_t *ta;
+
+  label = lv_label_create(scr_measurement);
+  lv_label_set_text(label, "Messung LIVE");
+  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 10);
+
+  btn = lv_btn_create(scr_measurement);
+  lv_obj_add_event_cb(btn, stop_measurement_event, LV_EVENT_ALL, NULL);
+  lv_obj_set_size(btn, 150, 300);
+  lv_obj_align(btn, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+  lv_obj_set_style_bg_color(btn, lv_color_hex3(0xF00), LV_STATE_DEFAULT);
+  label = lv_label_create(btn);
+  lv_label_set_text(label, "STOP");
+  lv_obj_center(label);
+
+  label = lv_label_create(scr_calibration);
+  lv_label_set_text(label, "100");
+  lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, -10, 10);
+  lv_obj_add_event_cb(label, label_forceMeasurement_change_event, LV_EVENT_MSG_RECEIVED, NULL);
+  lv_msg_subscribe_obj(MSG_NEW_FORCE_MEASURED, label, NULL);
+
+  lv_obj_t *meter;
+  lv_obj_set_size(meter, 300, 300);
+  lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, 10);
+
+  /*Add a scale first*/
+  lv_meter_scale_t *scale = lv_meter_add_scale(meter);
+  lv_meter_set_scale_ticks(meter, scale, 50, 2, 10, lv_palette_main(LV_PALETTE_GREY));
+  lv_meter_set_scale_major_ticks(meter, scale, 10, 4, 15, lv_color_black(), 10);
+  lv_meter_set_scale_range(meter, scale, 0, 100, 320, 110);
+
+  lv_meter_indicator_t *indic;
+
+  /*Add a green arc after the min value*/
+  indic = lv_meter_add_arc(meter, scale, 3, lv_palette_main(LV_PALETTE_GREEN), 0);
+  lv_meter_set_indicator_start_value(meter, indic, 0); // TODO: min value
+  lv_meter_set_indicator_end_value(meter, indic, 20);  // TODO: end value
+  // TODO: "end value" = MAX value + 25% ????
+
+  /*Make the tick lines blue at the start of the scale*/
+  indic = lv_meter_add_scale_lines(meter, scale, lv_palette_main(LV_PALETTE_GREEN), lv_palette_main(LV_PALETTE_GREEN),
+                                   false, 0);
+  lv_meter_set_indicator_start_value(meter, indic, 0); // TODO: min value
+  lv_meter_set_indicator_end_value(meter, indic, 20);  // TODO: end value
+
+  /*Add a red arc before the max value*/
+  indic = lv_meter_add_arc(meter, scale, 3, lv_palette_main(LV_PALETTE_RED), 0);
+  lv_meter_set_indicator_start_value(meter, indic, 80); // TODO: min value - 20%
+  lv_meter_set_indicator_end_value(meter, indic, 100);  // TODO: min value
+
+  /*Make the tick lines red at the end of the scale*/
+  indic = lv_meter_add_scale_lines(meter, scale, lv_palette_main(LV_PALETTE_RED), lv_palette_main(LV_PALETTE_RED), false,
+                                   0);
+  lv_meter_set_indicator_start_value(meter, indic, 80); // TODO: min value - 20%
+  lv_meter_set_indicator_end_value(meter, indic, 100);  // TODO: min value
+
+  /*Add a needle line indicator*/
+  indic = lv_meter_add_needle_line(meter, scale, 4, lv_color_black(), -10);
+
+  // TODO: set value of needle in message
+  // lv_meter_set_indicator_value(meter, indic, v);
+}
+
+#pragma endregion
+
+#pragma region MeasurementEnd
+
+void finish_btn_event(lv_event_t *e)
+{
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code != LV_EVENT_CLICKED)
+    return;
+  lv_scr_load(scr_start);
+}
+
+void create_screen_measurement_end()
+{
+  scr_measurement_end = lv_obj_create(NULL);
+
+  lv_obj_set_style_bg_color(scr_measurement_end, lv_color_hex3(0xF00), LV_STATE_DEFAULT);
+
+  lv_obj_t *label;
+  lv_obj_t *btn;
+
+  label = lv_label_create(scr_measurement_end);
+  lv_label_set_text(label, "VALUE"); // TODO: Ergebnis der Messung
+  lv_obj_align(label, LV_ALIGN_CENTER, 0, -40);
+  // TODO: riesig
+
+  btn = lv_btn_create(scr_measurement_end);
+  lv_obj_add_event_cb(btn, finish_btn_event, LV_EVENT_ALL, NULL);
+  lv_obj_set_size(btn, 150, 40);
+  lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_bg_color(btn, lv_color_hex3(0x070), LV_STATE_DEFAULT);
+  label = lv_label_create(btn);
+  lv_label_set_text(label, "Fertig");
+  lv_obj_center(label);
+}
+
+#pragma endregion
 
 void create_screen_settings()
 {
@@ -340,7 +608,7 @@ void create_screen_start(void)
   lv_obj_center(label);
 }
 
-/*** KEYBOARD ***/
+#pragma region Keyboard
 
 void kb_event_cb(lv_obj_t *keyboard, lv_event_t *e)
 {
@@ -389,3 +657,5 @@ void ta_event_cb(lv_event_t *e)
     lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
   }
 }
+
+#pragma endregion keyboard

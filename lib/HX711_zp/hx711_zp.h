@@ -69,7 +69,7 @@ public:
   // set the SCALE value; this value is used to convert the raw data to "human readable" data (measure units)
   void set_scale(float scale = 1.f);
 
-  // set the SCALE value; this value is used to convert the raw data to "human readable" data (measure units)
+  // set the SCALE value; based on the current measurements and the KNOWN FORCE
   void set_scale_current(float force);
 
   // get the current SCALE
@@ -84,7 +84,7 @@ public:
   // set BASEOFFSET, the value that's subtracted from the actual reading (base tare weight)
   void set_zeropoint_offset(float zeropoint_offset);
 
-  // set BASEOFFSET, the value that's subtracted from the actual reading (base tare weight)
+  // set BASEOFFSET, based on the CURRENT measurements
   void set_zeropoint_offset_current();
 
   // get the current BASEOFFSET
