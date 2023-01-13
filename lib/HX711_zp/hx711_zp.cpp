@@ -123,6 +123,11 @@ float HX711::read()
   RAWREADING = static_cast<long>(value);
   CURRENTREADING = lpFilter.filter((float)RAWREADING);
 
+  lastReadingIndex++;
+  if (lastReadingIndex >= lastReadingsCount)
+    lastReadingIndex = 0;
+  LASTREADINGS[lastReadingIndex] = CURRENTREADING;
+
   return CURRENTREADING;
 }
 
@@ -131,6 +136,7 @@ long HX711::get_raw_reading()
   return RAWREADING;
 }
 
+// private
 void HX711::wait_ready()
 {
   // Wait for the chip to become ready.
@@ -166,6 +172,11 @@ void HX711::tare(byte avgTimes)
   set_tare_offset(get_cal_force());
 }
 
+void HX711::set_scale_current(float force)
+{
+  SCALE_CAL = lastreadings_avg() / force;
+}
+
 void HX711::set_scale(float scale)
 {
   SCALE_CAL = scale;
@@ -184,6 +195,11 @@ void HX711::set_tare_offset(float offset)
 float HX711::get_tare_offset()
 {
   return TARE_OFFSET;
+}
+
+void HX711::set_zeropoint_offset_current()
+{
+  ZEROPOINT_OFFSET_CAL = lastreadings_avg();
 }
 
 void HX711::set_zeropoint_offset(float zeropoint_offset)
@@ -205,4 +221,15 @@ void HX711::power_down()
 void HX711::power_up()
 {
   digitalWrite(PD_SCK, LOW);
+}
+
+// private
+float HX711::lastreadings_avg()
+{
+  float sum = 0;
+  for (int i = 0; i < lastReadingsCount; i++)
+  {
+    sum += LASTREADINGS[i];
+  }
+  return sum / lastReadingsCount;
 }

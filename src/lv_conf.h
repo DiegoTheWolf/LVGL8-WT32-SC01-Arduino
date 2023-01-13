@@ -242,7 +242,7 @@ e.g. "stm32f769xx.h" or "stm32f429xx.h"*/
 #  define lv_snprintf  snprintf
 #  define lv_vsnprintf vsnprintf
 #else   /*LV_SPRINTF_CUSTOM*/
-#  define LV_SPRINTF_USE_FLOAT 0
+#  define LV_SPRINTF_USE_FLOAT 1
 #endif  /*LV_SPRINTF_CUSTOM*/
 
 #define LV_USE_USER_DATA 1
@@ -305,8 +305,8 @@ e.g. "stm32f769xx.h" or "stm32f429xx.h"*/
 #define LV_FONT_MONTSERRAT_8  0
 #define LV_FONT_MONTSERRAT_10 0
 #define LV_FONT_MONTSERRAT_12 0
-#define LV_FONT_MONTSERRAT_14 1
-#define LV_FONT_MONTSERRAT_16 0
+#define LV_FONT_MONTSERRAT_14 0
+#define LV_FONT_MONTSERRAT_16 1
 #define LV_FONT_MONTSERRAT_18 0
 #define LV_FONT_MONTSERRAT_20 0
 #define LV_FONT_MONTSERRAT_22 0
@@ -340,7 +340,7 @@ e.g. "stm32f769xx.h" or "stm32f429xx.h"*/
 #define LV_FONT_CUSTOM_DECLARE
 
 /*Always set a default font*/
-#define LV_FONT_DEFAULT &lv_font_montserrat_14
+#define LV_FONT_DEFAULT &lv_font_montserrat_16
 
 /*Enable handling large font and/or fonts with a lot of characters.
  *The limit depends on the font size, font face and bpp.
@@ -460,7 +460,7 @@ e.g. "stm32f769xx.h" or "stm32f429xx.h"*/
  *----------*/
 #define LV_USE_CALENDAR   1
 #if LV_USE_CALENDAR
-# define LV_CALENDAR_WEEK_STARTS_MONDAY 0
+# define LV_CALENDAR_WEEK_STARTS_MONDAY 1
 # if LV_CALENDAR_WEEK_STARTS_MONDAY
 #  define LV_CALENDAR_DEFAULT_DAY_NAMES {"Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"}
 # else
@@ -588,6 +588,8 @@ e.g. "stm32f769xx.h" or "stm32f429xx.h"*/
 /*1: Enable API to take snapshot for object*/
 #define LV_USE_SNAPSHOT 1
 
+/*1: Enable a published subscriber based messaging system */
+#define LV_USE_MSG 1
 
 /*==================
 * EXAMPLES

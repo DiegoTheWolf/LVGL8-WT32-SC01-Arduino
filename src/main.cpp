@@ -1,44 +1,53 @@
-/*
-    Simple Demo with WT32-SC01 + LovyanGFX + LVGL8.x
-*/
 #define LGFX_AUTODETECT // Autodetect board
 #define LGFX_USE_V1     // set to use new version of library
+
 // #define LV_CONF_INCLUDE_SIMPLE
 
-/* Uncomment below line to draw on screen with touch */
-#define DRAW_ON_SCREEN
-
 #include <LovyanGFX.hpp> // main library
-static LGFX lcd;         // declare display variable
-
 #include <lvgl.h>
 #include "lv_conf.h"
+
+static LGFX lcd; // declare display variable
+
 /*** Setup screen resolution for LVGL ***/
 static const uint16_t screenWidth = 480;
 static const uint16_t screenHeight = 320;
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t buf[screenWidth * 10];
+static lv_obj_t *kb;
+static lv_obj_t *ta;
+static lv_obj_t *scr_PREV;
+static lv_obj_t *scr_start;
+static lv_obj_t *scr_settings;
+static lv_obj_t *scr_calibration_zero;
+static lv_obj_t *scr_calibration_force;
 
-// Variables for touch x,y
-#ifdef DRAW_ON_SCREEN
-static int32_t x, y;
-#endif
-
-// // Variables for loadcell
+// Variables for loadcell
 #include <Preferences.h>
 #include <hx711_zp.h>
 
 #define HX711_dout 4
 #define HX711_sck 2
+#define MSG_NEW_FORCE_MEASURED 1
 
 HX711 loadcell;
 float reading = 0;
-// Preferences preferences;
+Preferences preferences;
+
+/*** Menu Structure ***/
+#include "MenuClass.h"
+MenuClass menuuu;
 
 /*** Function declaration ***/
 void display_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p);
 void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data);
-void lv_button_demo(void);
+void lv_screen_start(void);
+void kb_event_cb(lv_obj_t *keyboard, lv_event_t e);
+void kb_create(void);
+void ta_event_cb(lv_event_t *e);
+void create_screen_start();
+void create_screen_settings();
+void create_screen_calibration_zero();
 
 void setup(void)
 {
@@ -78,36 +87,21 @@ void setup(void)
   loadcell.set_zeropoint_offset(1);
   Serial.println("Loadcell initialized");
 
-  /*** Create simple label and show LVGL version ***/
-  String LVGL_Arduino = "Seilrissmaschine V1.0";
-  lv_obj_t *label = lv_label_create(lv_scr_act()); // full screen as the parent
-  lv_label_set_text(label, LVGL_Arduino.c_str());  // set label text
-  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);    // Center but 20 from the top
-
-  lv_button_demo();
+  create_screen_start();
+  create_screen_settings();
+  create_screen_calibration_zero();
+  lv_scr_load(scr_calibration_zero);
 }
 
 void loop()
 {
   lv_timer_handler(); /* let the GUI do its work */
-  delay(5);
+  loadcell.read();    // get the current data from the loadcell
+  lv_msg_send(MSG_NEW_FORCE_MEASURED, NULL);
+  lcd.setCursor(10, screenHeight - 10);
+  lcd.printf("Force: %9.2f", loadcell.get_last_reading_zeroed());
 
-  lcd.setCursor(0, 0);
-  Serial.print("reading loadcell ... ");
-  reading = loadcell.read();
-  Serial.print("finished: ");
-  Serial.println(reading);
-  lcd.printf("Force: %9.2f", reading);
-
-#ifdef DRAW_ON_SCREEN
-  /*** Draw on screen with touch ***/
-  if (lcd.getTouch(&x, &y))
-  {
-    lcd.fillRect(x - 2, y - 2, 5, 5, TFT_RED);
-    lcd.setCursor(380, 0);
-    lcd.printf("Touch:(%03d,%03d)", x, y);
-  }
-#endif
+  // lcd.getTouch(&x, &y)
 }
 
 /*** Display callback to flush the buffer to screen ***/
@@ -146,58 +140,252 @@ void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
   }
 }
 
-/* Counter button event handler */
-static void counter_event_handler(lv_event_t *e)
+static void to_scr_start_handler(lv_event_t *e)
 {
   lv_event_code_t code = lv_event_get_code(e);
-  lv_obj_t *btn = lv_event_get_target(e);
   if (code == LV_EVENT_CLICKED)
-  {
-    static uint8_t cnt = 0;
-    cnt++;
-
-    /*Get the first child of the button which is the label and change its text*/
-    lv_obj_t *label = lv_obj_get_child(btn, 0);
-    lv_label_set_text_fmt(label, "Button: %d", cnt);
-    LV_LOG_USER("Clicked");
-    Serial.println("Clicked");
-  }
+    lv_scr_load(scr_start);
 }
 
-/* Toggle button event handler */
-static void toggle_event_handler(lv_event_t *e)
+static void to_scr_calibration_zero_handler(lv_event_t *e)
 {
   lv_event_code_t code = lv_event_get_code(e);
-  if (code == LV_EVENT_VALUE_CHANGED)
-  {
-    LV_LOG_USER("Toggled");
-    Serial.println("Toggled");
-  }
+  if (code == LV_EVENT_CLICKED)
+    lv_scr_load(scr_calibration_zero);
 }
 
-void lv_button_demo(void)
+/* Settings button event handler */
+static void to_scr_settings_handler(lv_event_t *e)
 {
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_CLICKED)
+    lv_scr_load(scr_settings);
+}
+
+static void createBackButton(lv_obj_t *scr)
+{
+  // Back Button
+  lv_obj_t *btn_up = lv_btn_create(scr);
+  lv_obj_add_event_cb(btn_up, to_scr_start_handler, LV_EVENT_ALL, NULL);
+  lv_obj_set_size(btn_up, 50, 50);               /*Set its size*/
+  lv_obj_align(btn_up, LV_ALIGN_TOP_LEFT, 0, 0); // Center and 0 from the top
+
+  lv_obj_t *label = lv_label_create(btn_up);
+  lv_label_set_text(label, "<<");
+  lv_obj_center(label);
+}
+
+// https://forum.lvgl.io/t/multiple-windows/3850
+
+void label_forceRaw_change_event(lv_event_t *e)
+{
+  lv_obj_t *label = lv_event_get_target(e);
+  Serial.println("Force Update msg");
+  lv_label_set_text_fmt(label, "Rohwert: %06.0f", loadcell.get_last_reading());
+}
+
+void label_forceRawZero_change_event(lv_event_t *e)
+{
+  lv_obj_t *label = lv_event_get_target(e);
+  Serial.println("Force Update msg");
+  lv_label_set_text_fmt(label, "Genullt: %06.0f", loadcell.get_last_reading_zeroed());
+}
+
+void label_forceCal_change_event(lv_event_t *e)
+{
+  lv_obj_t *label = lv_event_get_target(e);
+  Serial.println("Force Update msg");
+  lv_label_set_text_fmt(label, "Kraft: %06.0f N", loadcell.get_cal_force());
+}
+
+void calibrate_zero_event(lv_event_t *e)
+{
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_CLICKED)
+    loadcell.set_zeropoint_offset_current();
+}
+
+void calibrate_force_event(lv_event_t *e)
+{
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_CLICKED)
+    loadcell.set_scale_current(50);
+}
+
+void create_screen_calibration_zero()
+{
+  scr_calibration_zero = lv_obj_create(NULL);
+
+  lv_obj_set_style_bg_color(scr_calibration_zero, lv_color_black(), LV_STATE_DEFAULT);
+
+  lv_obj_t *label;
+  lv_obj_t *btn;
+
+  label = lv_label_create(scr_calibration_zero);
+  lv_label_set_text(label, "Kalibrierung");
+  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 10);
+
+  btn = lv_btn_create(scr_calibration_zero);
+  lv_obj_add_event_cb(btn, calibrate_zero_event, LV_EVENT_ALL, NULL);
+  lv_obj_set_size(btn, 150, 60);
+  lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 70, 40);
+  label = lv_label_create(btn);
+  lv_label_set_text(label, "Nullpunkt");
+  lv_obj_center(label);
+
+  label = lv_label_create(scr_calibration_zero);
+  lv_label_set_text(label, "Maschine ohne Kraft,\naber mit allen Anbauteilen\nstehen lassen.");
+  lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+  lv_obj_align(label, LV_ALIGN_TOP_LEFT, 230, 40);
+
+  btn = lv_btn_create(scr_calibration_zero);
+  lv_obj_add_event_cb(btn, calibrate_force_event, LV_EVENT_ALL, NULL);
+  lv_obj_set_size(btn, 150, 60);
+  lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 70, 120);
+  label = lv_label_create(btn);
+  lv_label_set_text(label, "Kraft");
+  lv_obj_center(label);
+
+  label = lv_label_create(scr_calibration_zero);
+  lv_label_set_text(label, "Maschine mit definierter\nKraft belasten.");
+  lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+  lv_obj_align(label, LV_ALIGN_TOP_LEFT, 230, 130);
+
+  label = lv_label_create(scr_calibration_zero);
+  lv_label_set_text(label, "Messwerte:");
+  lv_obj_align(label, LV_ALIGN_LEFT_MID, 70, 40);
+
+  label = lv_label_create(scr_calibration_zero);
+  lv_label_set_text(label, "Messwert roh");
+  lv_obj_align(label, LV_ALIGN_LEFT_MID, 70, 60);
+  lv_obj_add_event_cb(label, label_forceRaw_change_event, LV_EVENT_MSG_RECEIVED, NULL);
+  lv_msg_subscribe_obj(MSG_NEW_FORCE_MEASURED, label, NULL);
+
+  label = lv_label_create(scr_calibration_zero);
+  lv_label_set_text(label, "Messwert zero");
+  lv_obj_align(label, LV_ALIGN_LEFT_MID, 70, 80);
+  lv_obj_add_event_cb(label, label_forceRawZero_change_event, LV_EVENT_MSG_RECEIVED, NULL);
+  lv_msg_subscribe_obj(MSG_NEW_FORCE_MEASURED, label, NULL);
+
+  label = lv_label_create(scr_calibration_zero);
+  lv_label_set_text(label, "Messwert kalibriert");
+  lv_obj_align(label, LV_ALIGN_LEFT_MID, 70, 100);
+  lv_obj_add_event_cb(label, label_forceCal_change_event, LV_EVENT_MSG_RECEIVED, NULL);
+  lv_msg_subscribe_obj(MSG_NEW_FORCE_MEASURED, label, NULL);
+
+  createBackButton(scr_calibration_zero);
+
+  // https://docs.lvgl.io/latest/en/html/widgets/textarea.html
+  // ta = lv_textarea_create(lv_scr_act());
+  // lv_obj_align(ta, LV_ALIGN_TOP_MID, 50, 200);
+  // lv_obj_set_size(ta, 200, 80);
+  // lv_obj_add_state(ta, LV_STATE_FOCUSED);
+  // lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, NULL);
+}
+
+void create_screen_settings()
+{
+  scr_settings = lv_obj_create(NULL);
+
+  lv_obj_set_style_bg_color(scr_settings, lv_color_black(), LV_STATE_DEFAULT);
+
   lv_obj_t *label;
 
-  // Button with counter
-  lv_obj_t *btn1 = lv_btn_create(lv_scr_act());
-  lv_obj_add_event_cb(btn1, counter_event_handler, LV_EVENT_ALL, NULL);
+  // Calibrate Button
+  lv_obj_t *btn_up = lv_btn_create(scr_settings);
+  lv_obj_add_event_cb(btn_up, to_scr_calibration_zero_handler, LV_EVENT_ALL, NULL);
+  lv_obj_set_size(btn_up, 200, 50);              /*Set its size*/
+  lv_obj_align(btn_up, LV_ALIGN_TOP_MID, 0, 20); // Center and 0 from the top
 
-  lv_obj_set_pos(btn1, 100, 100); /*Set its position*/
-  lv_obj_set_size(btn1, 120, 50); /*Set its size*/
-
-  label = lv_label_create(btn1);
-  lv_label_set_text(label, "Button");
+  label = lv_label_create(btn_up);
+  lv_label_set_text(label, "Kalibrieren");
   lv_obj_center(label);
 
-  // Toggle button
-  lv_obj_t *btn2 = lv_btn_create(lv_scr_act());
-  lv_obj_add_event_cb(btn2, toggle_event_handler, LV_EVENT_ALL, NULL);
-  lv_obj_add_flag(btn2, LV_OBJ_FLAG_CHECKABLE);
-  lv_obj_set_pos(btn2, 250, 100); /*Set its position*/
-  lv_obj_set_size(btn2, 120, 50); /*Set its size*/
+  createBackButton(scr_settings);
+}
 
-  label = lv_label_create(btn2);
-  lv_label_set_text(label, "Toggle Button");
+void create_screen_start(void)
+{
+  scr_start = lv_obj_create(NULL);
+
+  lv_obj_set_style_bg_color(scr_start, lv_color_black(), LV_STATE_DEFAULT);
+
+  lv_obj_t *label;
+
+  /*** Create simple label and show version ***/
+  label = lv_label_create(scr_start);                // full screen as the parent
+  lv_label_set_text(label, "Seilrissmaschine V1.0"); // set label text
+  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);      // Center and 0 from the top
+
+  // Start Button
+  lv_obj_t *btn_up = lv_btn_create(scr_start);
+  lv_obj_add_event_cb(btn_up, to_scr_start_handler, LV_EVENT_ALL, NULL);
+  lv_obj_set_size(btn_up, 200, 200);              /*Set its size*/
+  lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, 0, 0); // Center and 0 from the top
+  lv_obj_set_style_bg_color(btn_up, lv_color_hex3(0x5f5), LV_PART_MAIN);
+
+  label = lv_label_create(btn_up);
+  lv_label_set_text(label, "Messung");
   lv_obj_center(label);
+  lv_obj_set_style_text_color(btn_up, lv_color_black(), LV_PART_MAIN);
+
+  // Settings Button
+  lv_obj_t *btn_settings = lv_btn_create(scr_start);
+  lv_obj_add_event_cb(btn_settings, to_scr_settings_handler, LV_EVENT_ALL, NULL);
+  lv_obj_set_size(btn_settings, 200, 50);               /*Set its size*/
+  lv_obj_align(btn_settings, LV_ALIGN_TOP_MID, 0, 200); // Center and 0 from the top
+
+  label = lv_label_create(btn_settings);
+  lv_label_set_text(label, "Einstellungen");
+  lv_obj_center(label);
+}
+
+/*** KEYBOARD ***/
+
+void kb_event_cb(lv_obj_t *keyboard, lv_event_t *e)
+{
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_CANCEL)
+  {
+    lv_obj_set_height(lv_scr_act(), LV_VER_RES);
+    lv_keyboard_set_textarea(kb, NULL);
+    lv_obj_del(kb);
+    kb = NULL;
+  }
+  if (code == LV_EVENT_READY)
+  {
+    ta = lv_keyboard_get_textarea(kb);
+    const char *str = lv_textarea_get_text(ta);
+    /*Normally do something with data here*/
+
+    /**
+     * Restore Cont to original size and delete the KB
+     */
+    lv_keyboard_set_textarea(kb, NULL);
+    lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void kb_create(void)
+{
+  kb = lv_keyboard_create(lv_scr_act());
+  lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
+}
+
+void ta_event_cb(lv_event_t *e)
+{
+  lv_event_code_t code = lv_event_get_code(e);
+  ta = lv_event_get_target(e);
+  if (code == LV_EVENT_FOCUSED)
+  {
+    kb_create();
+    lv_keyboard_set_textarea(kb, ta);
+    lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  if (code == LV_EVENT_DEFOCUSED)
+  {
+    lv_keyboard_set_textarea(kb, NULL);
+    lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+  }
 }

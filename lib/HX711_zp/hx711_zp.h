@@ -5,23 +5,29 @@
 #include "freertos/task.h"
 #include "lp_filter.h"
 
-class HX711 {
- private:
-  byte PD_SCK;                     // Power Down and Serial Clock Input Pin
-  byte DOUT;                       // Serial Data Output Pin
-  byte GAIN;                       // amplification factor
-  float TARE_OFFSET = 0;           // used for tare weight
-  float ZEROPOINT_OFFSET_CAL = 0;  // used for the basic zero point deviation of a sensor (calibrated)
-  float SCALE_CAL = 1;             // used to return weight in grams, kg, ounces, whatever (calibrated)
-  float CURRENTREADING = 0;        // saves the last reading, to calculate weights.
-  long RAWREADING = 0;             // raw reading without filter
-  const float CUTOFFFREQ = 5;
+class HX711
+{
+private:
+  byte PD_SCK;                    // Power Down and Serial Clock Input Pin
+  byte DOUT;                      // Serial Data Output Pin
+  byte GAIN;                      // amplification factor
+  float TARE_OFFSET = 0;          // used for tare weight
+  float ZEROPOINT_OFFSET_CAL = 0; // used for the basic zero point deviation of a sensor (calibrated)
+  float SCALE_CAL = 1;            // used to return weight in grams, kg, ounces, whatever (calibrated)
+  float CURRENTREADING = 0;       // saves the last reading, to calculate weights.
+  static const int lastReadingsCount = 20;
+  float LASTREADINGS[lastReadingsCount];
+  int lastReadingIndex = 0;
+  long RAWREADING = 0; // raw reading without filter
+  const float CUTOFFFREQ = 2;
   LowPassFilter lpFilter;
 
   // Wait for the HX711 to become ready
   void wait_ready();
 
- public:
+  float lastreadings_avg();
+
+public:
   HX711();
 
   virtual ~HX711();
@@ -63,6 +69,9 @@ class HX711 {
   // set the SCALE value; this value is used to convert the raw data to "human readable" data (measure units)
   void set_scale(float scale = 1.f);
 
+  // set the SCALE value; this value is used to convert the raw data to "human readable" data (measure units)
+  void set_scale_current(float force);
+
   // get the current SCALE
   float get_scale();
 
@@ -74,6 +83,9 @@ class HX711 {
 
   // set BASEOFFSET, the value that's subtracted from the actual reading (base tare weight)
   void set_zeropoint_offset(float zeropoint_offset);
+
+  // set BASEOFFSET, the value that's subtracted from the actual reading (base tare weight)
+  void set_zeropoint_offset_current();
 
   // get the current BASEOFFSET
   float get_zeropoint_offset();
