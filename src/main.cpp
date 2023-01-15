@@ -3,6 +3,8 @@
 
 // #define LV_CONF_INCLUDE_SIMPLE
 
+// #define RTT_Calculation
+
 #include <LovyanGFX.hpp> // main library
 #include <lvgl.h>
 #include "lv_conf.h"
@@ -60,11 +62,13 @@ LV_FONT_DECLARE(UbuntuMono_72);
 LV_FONT_DECLARE(UbuntuMono_200);
 
 /*** round-time measurement ***/
+#ifdef RTT_Calculation
 #define RTT_TIMES_AVG 10
 uint32_t roundTripTime = 0;
 uint32_t roundTripTime_avg[RTT_TIMES_AVG];
 uint32_t roundTripTime_sum;
 byte roundTripTime_index;
+#endif
 
 /*** Motor control ***/;
 enum motor_states
@@ -85,6 +89,18 @@ uint8_t last_motor_state = MOTOR_NONE;
 #define MOTOR_2 32
 #define STARTPOS_SWITCH 12
 #define LED_DATA 27
+// setting PWM properties
+const int pwm_freq = 10000;
+const int pwm_channel_motor1 = 0;
+const int pwm_channel_motor2 = 1;
+const int pwm_resolution = 8;
+#define RAMPUP_TIME_MS 1000
+uint32_t rampup_time_start1 = 0;
+uint32_t rampup_time_start2 = 0;
+uint32_t rampupgoal1 = 0;
+uint32_t rampupgoal2 = 0;
+bool isRampingUp1 = false;
+bool isRampingUp2 = false;
 
 /*** Function declaration ***/
 void display_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p);
@@ -130,18 +146,25 @@ void setup(void)
   indev_drv.read_cb = touchpad_read;
   lv_indev_drv_register(&indev_drv);
 
-  /*** Initialize loadcell***/
+  /*** Initial
+  // loadcell.set_scale(preferences.getFloat("sfactor", 2.0F));ize loadcell***/
   loadcell.begin(HX711_dout, HX711_sck);
-  // loadcell.set_scale(preferences.getFloat("sfactor", 2.0F));
   // loadcell.set_zeropoint_offset(preferences.getLong("zeropoint", 1));
   loadcell.set_scale(2.0F);
   loadcell.set_zeropoint_offset(1);
   cal_value = loadcell.get_scale();
 
   /*** MOTOR ***/
-  pinMode(MOTOR_1, OUTPUT);
-  pinMode(MOTOR_2, OUTPUT);
-  pinMode(LED_DATA, OUTPUT);
+  // pinMode(MOTOR_1, OUTPUT);
+  // pinMode(MOTOR_2, OUTPUT);
+  // pinMode(LED_DATA, OUTPUT);
+  // configure LED PWM functionalitites
+  ledcSetup(pwm_channel_motor1, pwm_freq, pwm_resolution);
+  ledcSetup(pwm_channel_motor2, pwm_freq, pwm_resolution);
+
+  // attach the channel to the GPIO to be controlled
+  ledcAttachPin(MOTOR_1, pwm_channel_motor1);
+  ledcAttachPin(MOTOR_2, pwm_channel_motor2);
 
   /*** Preferences ***/
   preferences.begin("srm-app", false);
@@ -157,28 +180,92 @@ void setup(void)
   motor_state = MOTOR_COAST;
 }
 
+void rampup_pwm()
+{
+  if (isRampingUp1)
+  {
+    if (rampup_time_start1 == 0)
+      rampup_time_start1 = millis();
+    uint32_t t = millis() - rampup_time_start1;
+    if (t < RAMPUP_TIME_MS)
+    {
+      Serial.print("t: ");
+      Serial.print(t);
+      Serial.print("\trampupgoal: ");
+      Serial.print(rampupgoal1);
+      Serial.print("\tchannel: ");
+      Serial.print(pwm_channel_motor1);
+      Serial.print("\tmotor: ");
+      Serial.println((rampupgoal1 * t) / RAMPUP_TIME_MS);
+      ledcWrite(pwm_channel_motor1, (rampupgoal1 * t) / RAMPUP_TIME_MS);
+    }
+    else
+    {
+      ledcWrite(pwm_channel_motor1, rampupgoal1);
+      isRampingUp1 = false;
+      rampup_time_start1 = 0;
+    }
+  }
+
+  if (isRampingUp2)
+  {
+    if (rampup_time_start2 == 0)
+      rampup_time_start2 = millis();
+    uint32_t t = millis() - rampup_time_start2;
+    if (t < RAMPUP_TIME_MS)
+    {
+      Serial.print("t: ");
+      Serial.print(t);
+      Serial.print("\trampupgoal: ");
+      Serial.print(rampupgoal2);
+      Serial.print("\tchannel: ");
+      Serial.print(pwm_channel_motor2);
+      Serial.print("\tmotor: ");
+      Serial.println((rampupgoal2 * t) / RAMPUP_TIME_MS);
+      ledcWrite(pwm_channel_motor2, (rampupgoal2 * t) / RAMPUP_TIME_MS);
+    }
+    else
+    {
+      ledcWrite(pwm_channel_motor2, rampupgoal2);
+      isRampingUp2 = false;
+      rampup_time_start2 = 0;
+    }
+  }
+}
+
 void controlMotor()
 {
-  // if (digitalRead(STARTPOS_SWITCH) == HIGH)
-  //   motor_state = MOTOR_STARTPOSITION;
-
   if (last_motor_state != motor_state)
   {
     last_motor_state = motor_state;
+    isRampingUp1 = false;
+    isRampingUp2 = false;
+
     switch (motor_state)
     {
     case MOTOR_PULL:
-      digitalWrite(MOTOR_1, HIGH);
-      digitalWrite(MOTOR_2, LOW);
+    case MOTOR_TESTING:
+      // ledcWrite(pwm_channel_motor1, 200);
+      rampupgoal1 = 255;
+      isRampingUp1 = true;
+      ledcWrite(pwm_channel_motor2, 0);
+      // digitalWrite(MOTOR_1, HIGH);
+      // digitalWrite(MOTOR_2, LOW);
       break;
     case MOTOR_GOTOSTART:
     case MOTOR_PUSH:
-      digitalWrite(MOTOR_1, LOW);
-      digitalWrite(MOTOR_2, HIGH);
+      ledcWrite(pwm_channel_motor1, 0);
+      // ledcWrite(pwm_channel_motor2, 200);
+      rampupgoal2 = 255;
+      isRampingUp2 = true;
+      // digitalWrite(MOTOR_1, LOW);
+      // digitalWrite(MOTOR_2, HIGH);
       break;
     case MOTOR_BREAK:
-      digitalWrite(MOTOR_1, HIGH);
-      digitalWrite(MOTOR_2, HIGH);
+      ledcWrite(pwm_channel_motor1, 255);
+      ledcWrite(pwm_channel_motor2, 255);
+      // digitalWrite(MOTOR_1, HIGH);
+      // digitalWrite(MOTOR_2, HIGH);
       break;
     case MOTOR_ENDOFTEST:
       create_screen_measurement_end();
@@ -186,8 +273,10 @@ void controlMotor()
     case MOTOR_STARTPOSITION:
     case MOTOR_COAST:
     default:
-      digitalWrite(MOTOR_1, LOW);
-      digitalWrite(MOTOR_1, LOW);
+      ledcWrite(pwm_channel_motor1, 0);
+      ledcWrite(pwm_channel_motor2, 0);
+      // digitalWrite(MOTOR_1, LOW);
+      // digitalWrite(MOTOR_1, LOW);
       break;
     }
   }
@@ -294,6 +383,7 @@ void loop()
   }
   else
   {
+#ifdef RTT_Calculation
     // print status only, when we have time
     uint32_t t = millis() - roundTripTime;
     roundTripTime = millis();
@@ -303,11 +393,17 @@ void loop()
     roundTripTime_sum -= roundTripTime_avg[nextIndex(roundTripTime_index, RTT_TIMES_AVG)];
     lcd.setCursor(400, screenHeight - 10);
     lcd.printf("RTT: %04d", roundTripTime_sum / RTT_TIMES_AVG);
+#endif
+
     lcd.setCursor(10, screenHeight - 10);
     lcd.printf("Force: %7.2f", loadcell.get_cal_force());
+
+    lcd.setCursor(350, screenHeight - 10);
+    lcd.printf("Heap: %07d", ESP.getFreeHeap());
   }
 
   controlMotor();
+  rampup_pwm();
 
   // print motor status
   lcd.setCursor(120, screenHeight - 10);
@@ -656,6 +752,7 @@ void start_measurement_event(lv_event_t *e)
     mes_set_maxtime = atof(txt);
 
     create_screen_measurement_live();
+    resetTest();
     lv_scr_load(scr_measurement_live);
     motor_state = MOTOR_TESTING;
   }
