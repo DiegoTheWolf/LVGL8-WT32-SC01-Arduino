@@ -151,6 +151,16 @@ float HX711::get_last_reading()
   return CURRENTREADING;
 }
 
+float HX711::get_lastreadings_avg()
+{
+  float sum = 0;
+  for (int i = 0; i < lastReadingsCount; i++)
+  {
+    sum += LASTREADINGS[i];
+  }
+  return sum / lastReadingsCount;
+}
+
 float HX711::get_last_reading_zeroed()
 {
   return CURRENTREADING - ZEROPOINT_OFFSET_CAL;
@@ -174,7 +184,7 @@ void HX711::tare(byte avgTimes)
 
 void HX711::set_scale_current(float force)
 {
-  SCALE_CAL = lastreadings_avg() / force;
+  SCALE_CAL = (get_lastreadings_avg() - ZEROPOINT_OFFSET_CAL) / force;
 }
 
 void HX711::set_scale(float scale)
@@ -199,7 +209,7 @@ float HX711::get_tare_offset()
 
 void HX711::set_zeropoint_offset_current()
 {
-  ZEROPOINT_OFFSET_CAL = lastreadings_avg();
+  ZEROPOINT_OFFSET_CAL = get_lastreadings_avg();
 }
 
 void HX711::set_zeropoint_offset(float zeropoint_offset)
@@ -221,15 +231,4 @@ void HX711::power_down()
 void HX711::power_up()
 {
   digitalWrite(PD_SCK, LOW);
-}
-
-// private
-float HX711::lastreadings_avg()
-{
-  float sum = 0;
-  for (int i = 0; i < lastReadingsCount; i++)
-  {
-    sum += LASTREADINGS[i];
-  }
-  return sum / lastReadingsCount;
 }

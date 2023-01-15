@@ -25,8 +25,6 @@ private:
   // Wait for the HX711 to become ready
   void wait_ready();
 
-  float lastreadings_avg();
-
 public:
   HX711();
 
@@ -56,6 +54,8 @@ public:
   float get_last_reading();
 
   float get_last_reading_zeroed();
+
+  float get_lastreadings_avg();
 
   float get_cal_force();
 
